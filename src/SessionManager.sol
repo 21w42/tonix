@@ -1,12 +1,9 @@
-pragma ton-solidity >= 0.49.0;
-pragma ignoreIntOverflow;
+pragma ton-solidity >= 0.51.0;
 
-import "SyncFS.sol";
 import "CacheFS.sol";
-import "Format.sol";
 import "SharedCommandInfo.sol";
 
-contract SessionManager is SyncFS, CacheFS, Format, SharedCommandInfo {
+contract SessionManager is SharedCommandInfo, CacheFS {
 
     uint16 constant CANON_NONE  = 0;
     uint16 constant CANON_MISS  = 1;
@@ -30,6 +27,11 @@ contract SessionManager is SyncFS, CacheFS, Format, SharedCommandInfo {
     uint16 constant EXT_MOUNT_FS    = 8192;
     uint16 constant EXT_SPAWN       = 16384;
 
+    constructor(DeviceInfo dev, address source) Internal (dev, source) public {
+        _dev = dev;
+        _source = source;
+    }
+
     /* Primary entry point */
     function parse(string i_login, string i_cwd, string s_input) external view returns (string out, Session session,
                     InputS input, uint16 action, uint16 ext_action, string source, string target, Err[] errors, Arg[] arg_list, string cwd) {
@@ -49,10 +51,9 @@ contract SessionManager is SyncFS, CacheFS, Format, SharedCommandInfo {
         (uint8 c, string cmds, string[] args, uint flags, string x_source, string x_target) = _parse_input(s_input);
         target = x_target;
         source = x_source;
-        if (c == CMD_UNKNOWN) {
+        if (c == CMD_UNKNOWN)
             errors.push(Err(command_not_found, 0, cmds));
-//            err = cmds + ": command not found\n";
-        } else if (flags >= (1 << 254)) {
+        else if (flags >= (1 << 254)) {
             if ((flags & 1 << 255) > 0) {
                 delete args;
                 args.push(cmds);
@@ -77,13 +78,18 @@ contract SessionManager is SyncFS, CacheFS, Format, SharedCommandInfo {
                 - unknown options        */
             CmdInfoS ci = _command_info[c];
             uint16 nargs = uint16(args.length);
+            uint16 t_nargs = nargs;
+            if (!source.empty())
+                t_nargs++;
+            if (!target.empty())
+                t_nargs++;
             uint extra_flags = flags - (ci.options & flags);
             string args_check;
-            if (nargs < ci.min_args) {
+            if (t_nargs < ci.min_args) {
                 args_check = "missing file operand";
                 errors.push(Err(missing_file_operand, 0, cmds));
             }
-            if (nargs > ci.max_args) {
+            if (t_nargs > ci.max_args) {
                 args_check = "extra operand" + _quote(args[ci.max_args]);
                 errors.push(Err(extra_operand, 0, args[ci.max_args]));
             }
@@ -111,10 +117,9 @@ contract SessionManager is SyncFS, CacheFS, Format, SharedCommandInfo {
                         Arg arg = _dereference(deref_mode, s, session.wd);
                         arg_list.push(arg);
                         (string path, uint8 ft, uint16 ino,  , ) = arg.unpack();
-                        if (ino > 0 && _fs.inodes.exists(ino)) {
+                        if (ino > 0 && _inodes.exists(ino)) {
                             if ((c == cat || c == paste || c == wc) && ft == FT_DIR)
                                 errors.push(Err(0, EISDIR, path));
-//                        } else if (_op_format(c) || _op_stat(c) || _op_access(c))
                         } else if (_op_stat(c) || _op_access(c))
                             errors.push(Err(0, ino, path));
                     }
@@ -132,6 +137,14 @@ contract SessionManager is SyncFS, CacheFS, Format, SharedCommandInfo {
                         cwd = n_cwd;
                         ext_action |= EXT_CHANGE_DIR;
                     }
+                }
+                if (c == dd) {
+                    if (nargs > 0)
+                        source = args[0];
+                    if (nargs > 1)
+                        target = args[1];
+                    action = ACT_WRITE_FILES;
+                    ext_action = EXT_WRITE_FILES;
                 }
             }
         }
@@ -152,10 +165,10 @@ contract SessionManager is SyncFS, CacheFS, Format, SharedCommandInfo {
 
             if (_op_dev_admin(c)) action |= ACT_UPDATE_DEVICES;
             if (c == account) ext_action |= EXT_ACCOUNT;
-            if (!x_target.empty()) {
-                source = "vfs/proc/2/fd/1/out";
+            if (c == fallocate) ext_action |= EXT_OPEN_FILE;
+
+            if (!x_target.empty())
                 action |= ACT_PIPE_OUT_TO_FILE;
-            }
         }
     }
 
@@ -261,26 +274,15 @@ contract SessionManager is SyncFS, CacheFS, Format, SharedCommandInfo {
 
         for (string s_arg: s_args) {
             (string arg_dir, string arg_base) = _dir(s_arg);
-            string path;
-            uint16 dir_index;
-            uint16 cur_dir;
-            if (s_arg.substr(0, 1) == "/") {
-                path = s_arg;
-                cur_dir = _resolve_absolute_path(arg_dir);
-            } else {
-                path = _xpath(s_arg, wd);
-                cur_dir = wd;
-            }
-
-            if (canon_existing_dir || canon_existing)
-                dir_index = _dir_index(arg_base, cur_dir);
+            bool is_abs_path = s_arg.substr(0, 1) == "/";
+            string path = is_abs_path ? s_arg : _xpath(s_arg, wd);
+            uint16 cur_dir = is_abs_path ? _resolve_absolute_path(arg_dir) : wd;
+            uint16 dir_index = canon_existing_dir || canon_existing ? _dir_index(arg_base, cur_dir) : 0;
 
             if (dir_index > 0 && expand_symlinks) {
-                (, , uint8 ft) = _read_dir_entry(_fs.inodes[cur_dir].text_data[dir_index - 1]);
-                if (ft == FT_SYMLINK) {
-                    Arg arg = _dereference(EXPAND_SYMLINKS, s_arg, wd);
-                    (path, ft, , , dir_index) = arg.unpack();
-                }
+                (, , uint8 ft) = _read_dir_entry(_inodes[cur_dir].text_data[dir_index - 1]);
+                if (ft == FT_SYMLINK)
+                    (path, ft, , , dir_index) = _dereference(EXPAND_SYMLINKS, s_arg, wd).unpack();
             }
 
             if (!canon_missing && dir_index == 0) {
@@ -296,7 +298,7 @@ contract SessionManager is SyncFS, CacheFS, Format, SharedCommandInfo {
     function _abs_path_walk_up(uint16 dir) internal view returns (string path) {
         uint16 cur_dir = dir;
         while (cur_dir > ROOT_DIR) {
-            Inode inode = _fs.inodes[cur_dir];
+            Inode inode = _inodes[cur_dir];
             path = inode.file_name + "/" + path;
             (, uint16 parent, ) = _read_dir_entry(inode.text_data[1]);
             cur_dir = parent;
@@ -305,43 +307,26 @@ contract SessionManager is SyncFS, CacheFS, Format, SharedCommandInfo {
 
     function _canonicalize(uint16 mode, string s_arg, uint16 wd) internal view returns (string res, bool valid) {
         uint16 canon_mode = mode & 3;
-
         (string arg_dir, string arg_base) = _dir(s_arg);
-        string path;
-        uint16 dir_index;
-        uint16 cur_dir;
+        bool is_abs_path = s_arg.substr(0, 1) == "/";
         valid = true;
 
-        if (s_arg.substr(0, 1) == "/") {
-            path = s_arg;
-            cur_dir = _resolve_absolute_path(arg_dir);
-        } else {
-            path = _xpath(s_arg, wd);
-            cur_dir = wd;
-        }
+        if (canon_mode >= CANON_DIRS)
+            valid = _dir_index(arg_base, is_abs_path ? _resolve_absolute_path(arg_dir) : wd) > 0;
 
-        if (canon_mode >= CANON_DIRS) {
-            dir_index = _dir_index(arg_base, cur_dir);
-            valid = dir_index > 0;
-        }
-
-        if (canon_mode == CANON_NONE)
-            res = s_arg;
-        if (canon_mode == CANON_MISS || canon_mode == CANON_EXISTS)
-            res = path;
-        if (canon_mode == CANON_DIRS)
-            res = _xpath(arg_dir, _resolve_absolute_path(arg_dir)) + "/" + arg_base;
+        res = canon_mode == CANON_NONE || (canon_mode == CANON_MISS || canon_mode == CANON_EXISTS) && is_abs_path ?
+            s_arg : canon_mode == CANON_DIRS ? _xpath(arg_dir, _resolve_absolute_path(arg_dir)) + "/" + arg_base : _xpath(s_arg, wd);
     }
 
-    function _dereference(uint16 mode, string s_arg, uint16 wd) internal view returns (Arg arg_out) {
+    function _dereference(uint16 mode, string s_arg, uint16 wd) internal view returns (Arg) {
         bool expand_symlinks = (mode & EXPAND_SYMLINKS) > 0;
         (uint16 ino, uint8 ft, uint16 parent, uint16 dir_index) = _resolve_relative_path(s_arg, wd);
         Inode inode;
-        if (ino > 0 && _fs.inodes.exists(ino))
-            inode = _fs.inodes[ino];
+        if (ino > 0 && _inodes.exists(ino))
+            inode = _inodes[ino];
         if (expand_symlinks && ft == FT_SYMLINK)
             (s_arg, ino, ft) = _read_dir_entry(inode.text_data[0]);
-        arg_out = Arg(s_arg, ft, ino, parent, dir_index);
+        return Arg(s_arg, ft, ino, parent, dir_index);
     }
 
     /* Session helpers */
@@ -361,7 +346,6 @@ contract SessionManager is SyncFS, CacheFS, Format, SharedCommandInfo {
     /* Parser */
     function _parse_input(string s) private view returns (uint8 cmd, string cmds, string[] args, uint flags, string source, string target) {
         uint len = s.byteLength();
-        uint pos;
         bool src_next;
         bool tgt_next;
         string lexem;
@@ -370,7 +354,7 @@ contract SessionManager is SyncFS, CacheFS, Format, SharedCommandInfo {
         cmd = _command_index(cmds);
         if (cmd == 0)
             return (CMD_UNKNOWN, cmds, args, flags, source, target);
-        pos = p > 0 ? p - 1 : len;
+        uint pos = p > 0 ? p - 1 : len;
         while (pos < len) {
             pos++;
             (lexem, pos) = _parse_to_symbol(s, pos, len, " ");
@@ -378,7 +362,9 @@ contract SessionManager is SyncFS, CacheFS, Format, SharedCommandInfo {
             if (l == 0)
                 break;
             if (lexem.substr(0, 1) == "-") {
-                if (l > 1 && lexem.substr(1, 1) == "-") {
+                if (l == 1) {
+                    source = "stdin";
+                } else if (l > 1 && lexem.substr(1, 1) == "-") {
                     if (lexem == "--help") flags |= 1 << 255;
                     if (lexem == "--version") flags |= 1 << 254;
                 } else {
@@ -387,6 +373,7 @@ contract SessionManager is SyncFS, CacheFS, Format, SharedCommandInfo {
                         flags |= uint(1) << uint8(opts[i]);
                 }
             } else if (lexem.substr(0, 1) == ">") {
+                source = "stdout";
                 if (l == 1)
                     tgt_next = true;
                 else
@@ -395,6 +382,7 @@ contract SessionManager is SyncFS, CacheFS, Format, SharedCommandInfo {
                 target = lexem;
                 tgt_next = false;
             } else if (lexem.substr(0, 1) == "<") {
+                target = "stdout";
                 if (l == 1)
                     src_next = true;
                 else
@@ -407,9 +395,19 @@ contract SessionManager is SyncFS, CacheFS, Format, SharedCommandInfo {
         }
     }
 
-    function _init() internal override {
-        _sync_fs_cache();
-        address manual_pages = address.makeAddrStd(0, 0xcc59225a037b56f2cc325c9ced611994e160c4485537fe01ab3787e5d92ddac3);
-        SharedCommandInfo(manual_pages).query_command_info{value: 0.2 ton}();
+    function fetch_command_names() external view returns (string[] command_names) {
+        string[] commands = _get_file_contents("/etc/command_list");
+        uint len = commands.length;
+        if (len > 1)
+            command_names = commands;
+        else if (len == 1)
+            command_names = _split(commands[0], " ");
+        else
+            command_names = ["Command list not found"];
     }
+
+    function set_command_names(string[] command_names) external accept {
+        _command_names = command_names;
+    }
+
 }

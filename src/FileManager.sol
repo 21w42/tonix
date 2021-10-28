@@ -1,9 +1,13 @@
-pragma ton-solidity >= 0.49.0;
+pragma ton-solidity >= 0.51.0;
 
-import "SyncFS.sol";
 import "CacheFS.sol";
 
-contract FileManager is SyncFS, CacheFS {
+contract FileManager is CacheFS {
+
+    constructor(DeviceInfo dev, address source) Internal (dev, source) public {
+        _dev = dev;
+        _source = source;
+    }
 
     /* Common file operations */
     function file_op(Session session, InputS input, Arg[] arg_list) external view returns (string out, IOEvent[] ios, uint16 action, Err[] errors) {
@@ -13,7 +17,7 @@ contract FileManager is SyncFS, CacheFS {
         /* Process related operations in separate subroutines */
         if (_op_access(c))
             (out, ios, errors) = _access_ops(c, args, flags, wd, arg_list);
-        if (c == mkdir || c == touch)
+        if (c == mkdir || c == touch || c == fallocate)
             (out, ios, errors) = _create_file_ops(c, flags, wd, arg_list);
         if (c == rm || c == rmdir)
             (out, ios, errors) = _remove_file_ops(c, flags, wd, arg_list);
@@ -95,7 +99,7 @@ contract FileManager is SyncFS, CacheFS {
         if (!recursive || ft != FT_DIR)
             return (indices, paths, errors);
 
-        string[] text_data = _fs.inodes[ino].text_data;
+        string[] text_data = _inodes[ino].text_data;
         uint len = text_data.length;
 
         for (uint16 j = 3; j <= len; j++) {
@@ -113,10 +117,13 @@ contract FileManager is SyncFS, CacheFS {
     /* Create an empty file - mkdir and touch */
     function _create_file_ops(uint8 c, uint flags, uint16 wd, Arg[] arg_list) private pure returns (string out, IOEvent[] ios, Err[] errors) {
         bool md = c == mkdir;
+        bool allocate = c == fallocate;
         bool create_files = md || (flags & _c) == 0;
         bool error_if_exists = md && (flags & _p) == 0;
         bool update_if_exists = !md && (flags & _m) == 0;
         bool report_actions = md && (flags & _v) > 0;
+
+        uint8 event_type = md ? IO_MKDIR : allocate ? IO_ALLOCATE : IO_MKFILE;
 
         uint16 parent = wd;
         Arg[] args_create;
@@ -140,7 +147,7 @@ contract FileManager is SyncFS, CacheFS {
             }
         }
         if (create_files && !args_create.empty())
-            ios.push(IOEvent(md ? IO_MKDIR : IO_MKFILE, parent, args_create));
+            ios.push(IOEvent(event_type, parent, args_create));
         if (update_if_exists && !args_update.empty())
             ios.push(IOEvent(IO_UPDATE_TIME, parent, args_update));
     }
@@ -156,7 +163,7 @@ contract FileManager is SyncFS, CacheFS {
         for (Arg arg: arg_list) {
             (string s, uint8 ft, uint16 iop, , ) = arg.unpack();
             if (iop >= INODES) {
-                Inode victim = _fs.inodes[iop];
+                Inode victim = _inodes[iop];
                 if (ft == FT_DIR) {
                     if (remove_empty_dirs) {
                         if (victim.file_size <= 10) {
@@ -269,7 +276,7 @@ contract FileManager is SyncFS, CacheFS {
             else if (to_file_flag && to_dir && s_ft == FT_REG_FILE)
                 errors.push(Err(cant_overwrite_dir, 0, _quote(t_path)));
             else if (collision && newer_only) {
-                if (_fs.inodes[t_ino].modified_at > _fs.inodes[s_ino].modified_at)
+                if (_inodes[t_ino].modified_at > _inodes[s_ino].modified_at)
                     continue;
             } else {
                 (, string file_name) = _dir(to_dir ? s_path : t_path);
@@ -292,8 +299,8 @@ contract FileManager is SyncFS, CacheFS {
         bool verbose = (flags & _l) > 0;
         bool print_bytes = (flags & _b) > 0;
 
-        string[] t1 = _fs.inodes[arg_list[0].idx].text_data;
-        string[] t2 = _fs.inodes[arg_list[1].idx].text_data;
+        string[] t1 = _inodes[arg_list[0].idx].text_data;
+        string[] t2 = _inodes[arg_list[1].idx].text_data;
         string file_name_1 = arg_list[0].path;
         string file_name_2 = arg_list[1].path;
         for (uint i = 0; i < t1.length; i++) {
@@ -323,7 +330,4 @@ contract FileManager is SyncFS, CacheFS {
         ios.push(IOEvent(IO_TRUNCATE, wd, args));
     }
 
-    function _init() internal override accept {
-        _sync_fs_cache();
-    }
 }

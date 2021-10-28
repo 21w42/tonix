@@ -1,5 +1,6 @@
-pragma ton-solidity >= 0.49.0;
+pragma ton-solidity >= 0.51.0;
 
+import "Common.sol";
 struct Session {
     uint16 pid;
     uint16 uid;
@@ -50,8 +51,26 @@ struct LoginEvent {
     uint32 timestamp;
 }
 
+struct Host {
+    string name;
+    address addr;
+}
+
+struct Page {
+    string command;
+    string purpose;
+    string synopsis;
+    string description;
+    string option_list;
+    uint8 min_args;
+    uint16 max_args;
+    string[] option_descriptions;
+}
+
 /* Base functions and definitions */
-abstract contract Base {
+contract Base is Common {
+
+    uint16 constant M = 0xFFFF;
 
     uint16 constant SUPER_USER_GROUP = 0;
     uint16 constant REG_USER_GROUP = 1000;
@@ -66,13 +85,6 @@ abstract contract Base {
     uint16 constant USERS = 1000;
 
     uint16 constant DEF_UMASK = 18;
-
-    uint16 constant DEF_BLOCK_SIZE = 1024;
-    uint16 constant DEF_BIN_BLOCK_SIZE = 4096;
-    uint16 constant MAX_MOUNT_COUNT = 1024;
-    uint16 constant DEF_INODE_SIZE = 128;
-    uint16 constant MAX_BLOCKS = 400;
-    uint16 constant MAX_INODES = 600;
 
     string constant ROOT = "/";
 
@@ -90,29 +102,34 @@ abstract contract Base {
     uint8 constant IO_UPDATE_TIME   = 12;
     uint8 constant IO_UPDATE_TEXT_DATA = 13;
 
+    DeviceInfo _dev;
+    address _source;
+
     uint32 public _last_boot_time;
 
-    modifier accept {
-        tvm.accept();
-        _;
+    constructor(DeviceInfo dev, address source) public {
+        _dev = dev;
+        _source = source;
     }
 
     /* Upgrade */
     function upgrade(TvmCell c) external {
-        tvm.accept();
         TvmCell newcode = c.toSlice().loadRef();
-        tvm.commit();
+        tvm.accept();
         tvm.setcode(newcode);
         tvm.setCurrentCode(newcode);
         onCodeUpgrade();
     }
 
     function onCodeUpgrade() internal {
-        tvm.resetStorage();
         _last_boot_time = now;
         _init();
     }
 
+    function reset_storage() external accept {
+        tvm.resetStorage();
+    }
     /* Implemented by contracts to perform post-upgrade initialization */
-    function _init() internal virtual;
+    function _init() internal virtual {
+    }
 }

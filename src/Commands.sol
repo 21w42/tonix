@@ -1,4 +1,4 @@
-pragma ton-solidity >= 0.49.0;
+pragma ton-solidity >= 0.51.0;
 
 import "Base.sol";
 
@@ -101,8 +101,6 @@ abstract contract Commands is Base {
     uint8 constant whoami   = 94;
     uint8 constant CMD_NAME_LAST = whoami;
     uint8 constant CMD_UNKNOWN = 255;
-
-    uint16 constant M = 0xFFFF;
 
     uint16 constant ACT_NO_ACTION       = 0;
     uint16 constant ACT_PRINT_STATUS    = 1;
@@ -258,7 +256,7 @@ abstract contract Commands is Base {
     }
 
     function _op_file(uint8 c) internal pure returns (bool) {
-        return c == cp || c == cmp || c == fallocate || c == ln || c == mkdir || c == mv || c == rm
+        return c == cp || c == cmp || c == dd || c == fallocate || c == ln || c == mkdir || c == mv || c == rm
             || c == rmdir || c == tar || c == touch || c == truncate;
     }
 

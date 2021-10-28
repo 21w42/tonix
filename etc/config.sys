@@ -1,0 +1,14 @@
+/:d:d:bin dev etc home mnt proc sys usr
+home:d:d:boris guest ivan
+dev:d:b:system
+etc:d:-:command_list fstab group hostname hosts motd mtab passwd reasons status
+command_list:-:-: :\n:account basename blkdiscard cat cd chfn chgrp chmod chown cksum cmp colrm column cp cut dd df dirname du echo env expand fallocate file findfs findmnt finger fsck fstrim fuser getent getopt gpasswd grep groupadd groupdel groupmod head help hostname id last ln login logout look losetup ls lsblk lslogins lsof man mapfile mkdir mkfs mknod more mount mountpoint mv namei newgrp paste pathchk ping ps pwd readlink realpath reboot rename rev rm rmdir script stat tail tar touch tr truncate udevadm umount uname unexpand useradd userdel usermod utmpdump wc whatis whereis who whoami
+fstab:-:-: :	:BlockDevice / 0 1
+group:-:-: :	:root 0:staff 1000:guest 10000
+hostname:-:s:BlockDevice
+hosts:-:s:system
+motd:-:-: : :Welcome to Tonix.:Type "help" to get a list of commands.:"man <COMMAND>" or "help <COMMAND>" sometimes might be helpful.:Some options for certain commands work as well.:Feel free to navigate a pre-made file system using intuitive commands.:Your feedback is greatly appreciated!:Have fun ;-)
+mtab:-:-: :	:/ BlockDevice 1 1 1
+passwd:-:-: :	:root 0 0 root /root:boris 1000 1000 staff /home/boris:ivan 1001 1000 staff /home/ivan:guest 10000 10000 guest /home/guest
+reasons:-:-: : :missing operand:cannot remove:cannot stat:cannot access:cannot create directory:cannot open:invalid option:extra operand:failed to remove:missing operand after:missing file operand:missing destination file operand after:invalid group:missing filename:invalid mode:invalid owner:cannot touch:cannot create regular file:too many arguments:too many operands:Try '--help' for more information:failed to access:-r not specified; omitting directory:cannot overwrite directory with non-directory:command not found:options -l and -s are incompatible:target:failed to create symbolic link:failed to create hard link:cannot make both hard and symbolic links:hard link not allowed for directory:mutually exclusive arguments -c -n -r -z:failed to locate login data:not a block device
+status:-:-: : :No such file or directory:File exists:Not a directory:Is a directory:Permission denied:Directory not empty:Not owner:Invalid argument:Read-only file system:Bad address:Bad file number:fd is not a valid open file descriptor:Device busy:Operation not applicable:pathname is too long

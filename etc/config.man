@@ -1,0 +1,7 @@
+/:d:d:bin dev etc
+bin:d:-:account basename blkdiscard cat cd chfn chgrp chmod chown cksum cmp colrm column cp cut dd df dirname du echo env expand fallocate file findfs findmnt finger fsck fstrim fuser getent getopt gpasswd grep groupadd groupdel groupmod head help hostname id last ln login logout look losetup ls lsblk lslogins lsof man mapfile mkdir mkfs mknod more mount mountpoint mv namei newgrp paste pathchk ping ps pwd readlink realpath reboot rename rev rm rmdir script stat tail tar touch tr truncate udevadm umount uname unexpand useradd userdel usermod utmpdump wc whatis whereis who whoami
+dev:d:b:system
+etc:d:-:command_list hostname hosts
+command_list:-:-: :\n:account basename blkdiscard cat cd chfn chgrp chmod chown cksum cmp colrm column cp cut dd df dirname du echo env expand fallocate file findfs findmnt finger fsck fstrim fuser getent getopt gpasswd grep groupadd groupdel groupmod head help hostname id last ln login logout look losetup ls lsblk lslogins lsof man mapfile mkdir mkfs mknod more mount mountpoint mv namei newgrp paste pathchk ping ps pwd readlink realpath reboot rename rev rm rmdir script stat tail tar touch tr truncate udevadm umount uname unexpand useradd userdel usermod utmpdump wc whatis whereis who whoami
+hostname:-:s:BlockDevice
+hosts:-:s:system

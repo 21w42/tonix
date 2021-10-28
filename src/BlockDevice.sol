@@ -1,11 +1,10 @@
-pragma ton-solidity >= 0.49.0;
+pragma ton-solidity >= 0.51.0;
 
-import "SyncFS.sol";
-import "Base.sol";
+import "CacheFS.sol";
 import "ICache.sol";
 
 /* Generic block device hosting a generic file system */
-contract BlockDevice is Base, SyncFS, ISourceFS {
+contract BlockDevice is SyncFS, ISourceFS {
 
     uint16 constant STG_NONE    = 0;
     uint16 constant STG_PRIMARY = 1;
@@ -16,28 +15,33 @@ contract BlockDevice is Base, SyncFS, ISourceFS {
     uint16 constant STG_TMP     = 32;
     uint16 constant STG_RO      = 64;
 
-    address[5] _readers;
-
-    DeviceInfo public _dev;
+    address[] _readers;
 
     mapping (uint16 => FileMapS) public _file_table;
     string[] public _blocks;
     mapping (uint16 => FileS) public _fd_table;
     uint16 _fdc;
 
+    constructor(DeviceInfo dev, address source) Internal (dev, source) public {
+        _dev = dev;
+        _source = source;
+    }
+
     /* Mount a set of index nodes to the specified mount point of the primary file system */
-    function mount_dir(uint16 mount_point_index, Inode[] inodes) external override accept {
-        uint n_files = inodes.length;
-        uint counter = _fs.ic;
-        Inode mount_point = _fs.inodes[mount_point_index];
+    function mount_dir(uint16 mount_point_index, SuperBlock /*sb*/, mapping (uint16 => Inode) inodes) external override accept {
+        uint n_files;
         uint16[] indices;
-        for (uint i = 0; i < n_files; i++) {
-            Inode inode = inodes[i];
-            uint16 index = uint16(counter + i);
-            _fs.inodes[index] = inode;
-            mount_point = _add_dir_entry(mount_point, index, inode.file_name, _mode_to_file_type(inode.mode));
+        uint counter = _sb.inode_count;
+        Inode mount_point = _inodes[mount_point_index];
+
+        for ((, Inode inode): inodes) {
+            if (inode.mode != FT_DIR) {
+                uint16 index = uint16(counter + n_files++);
+                _inodes[index] = inode;
+                mount_point = _add_dir_entry(mount_point, index, inode.file_name, _mode_to_file_type(inode.mode));
+            }
         }
-        _fs.inodes[mount_point_index] = mount_point;
+        _inodes[mount_point_index] = mount_point;
         _claim_inodes(n_files, n_files);
 
         indices.push(mount_point_index);
@@ -46,9 +50,9 @@ contract BlockDevice is Base, SyncFS, ISourceFS {
         _update_inodes_set(indices);
     }
 
-    function request_mount(address source, uint16 export_id, uint16 mount_point, uint16 options) external view override accept {
+    function request_mount(address source, uint16 mount_point, uint16 options) external view override accept {
         if ((options & MOUNT_DIR) > 0)
-            IExportFS(source).rpc_mountd{value: 0.1 ton}(export_id, ROOT_DIR + mount_point);
+            IExportFS(source).rpc_mountd{value: 0.1 ton}(ROOT_DIR + mount_point);
     }
 
     /* Common file system update routine */
@@ -116,6 +120,7 @@ contract BlockDevice is Base, SyncFS, ISourceFS {
         }
         IUserTables(msg.sender).update_tables{value: 0.1 ton, flag: 1}(_users, _groups, reg_u, sys_u, reg_g, sys_g);
     }
+
     /* Write the text to a file at path */
     function write_to_file(Session session, string path, string text) external accept {
         (uint16 uid, uint16 gid, uint16 wd) = (session.uid, session.gid, session.wd);
@@ -123,7 +128,7 @@ contract BlockDevice is Base, SyncFS, ISourceFS {
         uint16 n_blocks = uint16(size / _dev.blk_size) + 1;
         uint16 storage_type = STG_NONE;
 
-        if (n_blocks > _fs.sb.free_blocks)
+        if (n_blocks > _sb.free_blocks)
             return;
 
         storage_type |= STG_PRIMARY;
@@ -136,13 +141,38 @@ contract BlockDevice is Base, SyncFS, ISourceFS {
             text_data = [text];
         }
 
-        uint16 counter = _fs.ic++;
-        _fs.inodes[counter] = _get_any_node(FT_REG_FILE, uid, gid, path, text_data);
+        uint16 counter = _sb.inode_count;
+        Inode inode = _get_any_node(FT_REG_FILE, uid, gid, path, text_data);
+        inode.file_size = size;
+        _inodes[counter] = inode;
         _append_dir_entry(wd, counter, path, FT_REG_FILE);
 
         _file_table[counter] = FileMapS(storage_type, b_start, b_count);
         _claim_inodes(1, b_count);
         _update_inodes_set([wd, counter]);
+    }
+
+    function append_to_file(Session session, string path, string text) external accept {
+        (uint16 uid, , ) = (session.uid, session.gid, session.wd);
+        uint32 size = text.byteLength();
+        uint16 n_blocks = uint16(size / _dev.blk_size) + 1;
+        if (n_blocks > _sb.free_blocks)
+            return;
+        optional (uint16, Inode) p = _inodes.max();
+        while (p.hasValue()) {
+            (uint16 idx, Inode inode) = p.get();
+            if (inode.file_name == path) {
+                if (inode.owner_id != uid)
+                    continue;
+                (, uint16 b_count) = _write_text(text);
+                inode.file_size += size;
+                inode.last_modified = now;
+                _inodes[idx] = inode;
+                _file_table[idx].count += b_count;
+                _update_inodes_set([idx]);
+            }
+            p = _inodes.prev(idx);
+        }
     }
 
     /* Write blocks of textual data to a file identified by descriptor */
@@ -157,7 +187,7 @@ contract BlockDevice is Base, SyncFS, ISourceFS {
         f.bc += len;
 
         if (f.bc >= f.n_blk) {
-            _fs.inodes[inode].file_size = uint32(f.n_blk) * _fs.sb.block_size + blocks[len - 1].byteLength();
+            _inodes[inode].file_size = uint32(f.n_blk) * _sb.block_size + blocks[len - 1].byteLength();
             delete _proc[pid].fd_table[fd];
             _update_inodes_set([inode]);
         } else
@@ -180,30 +210,17 @@ contract BlockDevice is Base, SyncFS, ISourceFS {
 
     /* Remove an expired index node */
     function remove_node(uint16 parent, uint16 victim) external accept {
-        delete _fs.inodes[victim];
+        delete _inodes[victim];
 
-        if (_fs.inodes[parent].n_links < 2)
-            delete _fs.inodes[parent];
+        if (_inodes[parent].n_links < 2)
+            delete _inodes[parent];
         _update_inodes_set([parent, victim]);
     }
 
     /* Print an internal debugging information about the file system state */
     function dump_fs(uint8 level) external view returns (string) {
-        return _dump_fs(level, _fs);
+        return _dump_fs(level, _sb, _inodes);
     }
-
-    /*function _create_subdirs(uint16 pino, string[] files) internal {
-        uint n_subdirs = files.length;
-        uint counter = _fs.ic;
-        for (uint i = 0; i < n_subdirs; i++) {
-            uint16 index = uint16(counter + i);
-            string file_name = files[i];
-            Inode dir_node = _get_dir_node(index, pino, SUPER_USER, SUPER_USER_GROUP, file_name);
-            _fs.inodes[index] = dir_node;
-            _append_dir_entry(pino, index, file_name, FT_DIR);
-        }
-        _claim_inodes(n_subdirs, n_subdirs);
-    }*/
 
     function _create_subdirs(Session session, uint16 pino, string[] files) internal {
         Arg[] args_create;
@@ -214,26 +231,21 @@ contract BlockDevice is Base, SyncFS, ISourceFS {
 
     /* Directory entry helpers */
     function _append_dir_entry(uint16 dir_idx, uint16 ino, string file_name, uint8 file_type) internal {
-        Inode inode_dir = _fs.inodes[dir_idx];
-        string dirent = _dir_entry_line(ino, file_name, file_type);
-        inode_dir.text_data.push(dirent);
-        inode_dir.file_size += uint32(dirent.byteLength());
-        inode_dir.n_links++;
-//        _update_blocks(dir_idx, dirent);
-        _fs.inodes[dir_idx] = inode_dir;
+        _inodes[dir_idx] = _add_dir_entry(_inodes[dir_idx], ino, file_name, file_type);
     }
 
     function _read_indices(Arg[] args) internal view returns (string[][] texts) {
         for (Arg arg: args) {
             uint16 idx = arg.idx;
-            FileMapS file = _file_table[idx];
-            if ((file.storage_type & STG_PRIMARY) > 0) {
+            (uint16 storage_type, uint16 start, uint16 count) = _file_table[idx].unpack();
+            if ((storage_type & STG_PRIMARY) > 0) {
                 string text;
-                for (uint i = 0; i < file.count; i++)
-                    text.append(_blocks[file.start + i]);
+                uint cap = math.min(start + count, _blocks.length);
+                for (uint i = start; i < cap; i++)
+                    text.append(_blocks[i]);
                 texts.push([text]);
             } else
-                texts.push(_fs.inodes[idx].text_data);
+                texts.push(_inodes[idx].text_data);
         }
     }
 
@@ -241,60 +253,60 @@ contract BlockDevice is Base, SyncFS, ISourceFS {
         (, uint16 uid, uint16 gid, ) = session.unpack();
         uint16[] indices;
         uint len = args.length;
-        Inode parent_inode = _fs.inodes[pino];
+        Inode parent_inode = _inodes[pino];
         for (uint i = 0; i < len; i++) {
             (string path, , uint16 idx, uint16 parent, uint16 dir_idx) = args[i].unpack();
             if (et == IO_CHATTR) {
-                Inode inode = _fs.inodes[idx];
+                Inode inode = _inodes[idx];
                 if (inode.owner_id == uid || inode.group_id == gid) {
-                    _fs.inodes[idx].owner_id = parent_inode.owner_id;
-                    _fs.inodes[idx].group_id = parent_inode.group_id;
+                    _inodes[idx].owner_id = parent_inode.owner_id;
+                    _inodes[idx].group_id = parent_inode.group_id;
                     indices.push(idx);
                 }
             }
             if (et == IO_PERMISSION) {
-                _fs.inodes[idx].mode = parent_inode.mode;
+                _inodes[idx].mode = parent_inode.mode;
                 indices.push(idx);
             }
             if (et == IO_UPDATE_TIME) {
-                _fs.inodes[idx].modified_at = parent_inode.modified_at;
-                _fs.inodes[idx].last_modified = parent_inode.last_modified;
+                _inodes[idx].modified_at = parent_inode.modified_at;
+                _inodes[idx].last_modified = parent_inode.last_modified;
                 indices.push(idx);
             }
             if (et == IO_UNLINK) {
-                _fs.inodes[idx].n_links--;
-                _fs.inodes[parent].n_links--;
-                if (_fs.inodes[idx].n_links == 0) {
-                    delete _fs.inodes[idx];
-                    string[] text = _fs.inodes[parent].text_data;
+                _inodes[idx].n_links--;
+                _inodes[parent].n_links--;
+                if (_inodes[idx].n_links == 0) {
+                    delete _inodes[idx];
+                    string[] text = _inodes[parent].text_data;
                     for (uint16 j = dir_idx - 1; j < text.length - 1; j++)
                         text[j] = text[j + 1];
-                    _fs.inodes[parent].text_data = text;
+                    _inodes[parent].text_data = text;
                 }
                 indices.push(parent);
             }
             if (et == IO_HARDLINK) {
-                _fs.inodes[pino].n_links++;
+                _inodes[pino].n_links++;
                 _append_dir_entry(pino, idx, path, FT_REG_FILE);
             }
             if (et == IO_UPDATE_TEXT_DATA) {
-                Inode inode = _fs.inodes[idx];
+                Inode inode = _inodes[idx];
                 inode.text_data.push(path);
                 inode.file_size += uint32(path.byteLength());
                 inode.modified_at = now;
-                _fs.inodes[idx] = inode;
+                _inodes[idx] = inode;
                 indices.push(idx);
             }
         }
         indices.push(pino);
-        _fs.sb.last_write_time = now;
+        _sb.last_write_time = now;
         _update_inodes_set(indices);
     }
 
     function _add_files(Session session, uint16 pino, uint8 et, Arg[] args) internal {
         (uint16 pid, uint16 uid, uint16 gid, ) = session.unpack();
         uint n_files = args.length;
-        uint16 counter = _fs.ic;
+        uint16 counter = _sb.inode_count;
         uint total_blocks;
         bool copy_contents = et == IO_WR_COPY;
         bool allocate = et == IO_ALLOCATE;
@@ -306,13 +318,12 @@ contract BlockDevice is Base, SyncFS, ISourceFS {
             (string s, , uint16 idx, uint16 parent, uint16 dir_idx) = args[i].unpack();
             uint16 ino = uint16(counter + i);
             if (et == IO_MKDIR) {
-                _fs.inodes[ino] = _get_dir_node(ino, parent, uid, gid, s);
+                _inodes[ino] = _get_dir_node(ino, parent, uid, gid, s);
                 _append_dir_entry(parent, ino, s, FT_DIR);
                 inodes.push(idx);
             } else if (et == IO_MKFILE) {
-//                _fs.inodes[ino] = _get_file_node(uid, gid, s, [""]);
                 string[] empty;
-                _fs.inodes[ino] = _get_any_node(FT_REG_FILE, uid, gid, s, empty);
+                _inodes[ino] = _get_any_node(FT_REG_FILE, uid, gid, s, empty);
                 _append_dir_entry(parent, ino, s, FT_REG_FILE);
                 inodes.push(parent);
             } else if (et == IO_SYMLINK) {
@@ -320,7 +331,7 @@ contract BlockDevice is Base, SyncFS, ISourceFS {
                     symlink_target_idx = parent;
                     counter--;
                 } else {
-                    _fs.inodes[ino] = _get_symlink_node(uid, gid, s, _fs.inodes[parent].text_data[dir_idx - 1]);
+                    _inodes[ino] = _get_symlink_node(uid, gid, s, _inodes[parent].text_data[dir_idx - 1]);
                     _append_dir_entry(symlink_target_idx, ino, s, FT_SYMLINK);
                     inodes.push(ino);
                     inodes.push(symlink_target_idx);
@@ -333,7 +344,7 @@ contract BlockDevice is Base, SyncFS, ISourceFS {
                 string[] contents;
 
                 if (idx > 0)
-                    contents = _fs.inodes[idx].text_data;
+                    contents = _inodes[idx].text_data;
 
                 if (allocate) {
                     (b_start, b_count, b_batch_size) = _allocate_blocks(idx);
@@ -344,12 +355,11 @@ contract BlockDevice is Base, SyncFS, ISourceFS {
                     if ((source.storage_type & STG_PRIMARY) > 0)
                         (b_start, b_count) = _copy_blocks(source.start, source.count);
                     else if (!contents.empty())
-//                        (b_start, b_count) = _write_text(_merge(contents));
                         (b_start, b_count) = _update_blocks(ino, _merge(contents));
                 }
                 if (b_start > 0 && b_count > 0)
                     target_storage_type |= STG_PRIMARY;
-                _fs.inodes[ino] = _get_any_node(FT_REG_FILE, uid, gid, s, contents);
+                _inodes[ino] = _get_any_node(FT_REG_FILE, uid, gid, s, contents);
                 _append_dir_entry(parent, ino, s, FT_REG_FILE);
                 _file_table[ino] = FileMapS(target_storage_type, uint16(b_start), uint16(b_count));
                 total_blocks += b_count;
@@ -374,7 +384,7 @@ contract BlockDevice is Base, SyncFS, ISourceFS {
 
     /* Block operations helpers */
     function _copy_blocks(uint s_start, uint s_count) internal returns (uint start, uint count) {
-        SuperBlock sb = _fs.sb;
+        SuperBlock sb = _sb;
         if (sb.file_system_state && sb.free_blocks > 0) {
             start = _blocks.length;
             count = math.min(sb.free_blocks, s_count);
@@ -384,7 +394,7 @@ contract BlockDevice is Base, SyncFS, ISourceFS {
     }
 
     function _allocate_blocks(uint kbytes) internal returns (uint start, uint count, uint batch_size) {
-        SuperBlock sb = _fs.sb;
+        SuperBlock sb = _sb;
         uint blk_size = _dev.blk_size;
         count = kbytes * 1024 / blk_size;
         batch_size = 16000 / blk_size;
@@ -400,11 +410,11 @@ contract BlockDevice is Base, SyncFS, ISourceFS {
         uint blk_size = _dev.blk_size;
         uint len = text.byteLength();
         uint n_blocks = len / blk_size;
-
+        uint start = _blocks.length;
         for (uint i = 0; i < n_blocks; i++)
             _blocks.push(text.substr(i * blk_size, blk_size));
         _blocks.push(text.substr(n_blocks * blk_size, len - n_blocks * blk_size));
-        return (uint16(_blocks.length), uint16(n_blocks + 1));
+        return (uint16(start), uint16(n_blocks + 1));
     }
 
     function _update_blocks(uint16 index, string text) internal returns (uint16 b_start, uint16 b_count) {
@@ -418,9 +428,8 @@ contract BlockDevice is Base, SyncFS, ISourceFS {
         if (_file_table.exists(index)) {
             FileMapS fm = _file_table[index];
             (storage_type, b_start, b_count) = fm.unpack();
-        } else {
+        } else
             b_start = blocks_len;
-        }
 
         if (b_count == 0)
             b_count = uint16(n_blocks);
@@ -438,111 +447,73 @@ contract BlockDevice is Base, SyncFS, ISourceFS {
             else
                 _blocks.push(text_chunk);
         }
-//        storage_type |= STG_PRIMARY;
     }
 
-    /* File system initialization */
-    function _make_fs() internal {
-        _fs = _get_fs(1, "sysfs", ["bin", "dev", "etc", "home", "mnt", "proc", "sys", "usr"]);
-        Session session = Session(1, SUPER_USER, SUPER_USER_GROUP, ROOT_DIR);
-        _create_subdirs(session, ROOT_DIR + 4, ["boris", "guest", "ivan"]);
-        _create_subdirs(session, ROOT_DIR + 7, ["dev"]);
-        _create_subdirs(session, ROOT_DIR + 12, ["block", "char"]);
-        _dev = DeviceInfo(FT_BLKDEV, 1, "BlockDevice", 1024, 100, address(this));
-        _blocks.push(_write_sb());
+    function init_fs(SuperBlock sb, mapping (uint16 => Inode) inodes) external accept {
+        _sb = sb;
+        _inodes = inodes;
     }
 
     function _write_sb() internal view returns (string) {
         (bool file_system_state, bool errors_behavior, string file_system_OS_type, uint16 inode_count, uint16 block_count, uint16 free_inodes,
             uint16 free_blocks, uint16 block_size, uint32 created_at, uint32 last_mount_time, uint32 last_write_time, uint16 mount_count,
-            uint16 max_mount_count, uint16 lifetime_writes, uint16 first_inode, uint16 inode_size) = _fs.sb.unpack();
+            uint16 max_mount_count, uint16 lifetime_writes, uint16 first_inode, uint16 inode_size) = _sb.unpack();
 
-        return format("{}\t{}\t{}\n{}\t{}\t{}\t{}\n{}\n{}\t{}\t{}\t{}\t{}\n{}\t{}\t{}\n", file_system_state ? 1 : 0, errors_behavior ? 1 : 0,
+        return format("{}\t{}\t{}\n{}\t{}\t{}\t{}\n{}\n{}\t{}\t{}\t{}\t{}\n{}\t{}\t{}\n", file_system_state ? "Y" : "N", errors_behavior ? "Y" : "N",
             file_system_OS_type, inode_count, block_count++, free_inodes, free_blocks--, block_size, created_at, last_mount_time, last_write_time,
             mount_count, max_mount_count, lifetime_writes, first_inode, inode_size);
     }
 
-    function _init() internal override {
-        this.init();
-    }
-
-    function _get_fd_table() internal pure returns (mapping (uint16 => FileS) fd_table) {
-        fd_table[0] = FileS(0, 0, 0, 0, 0, 0, 0, "in");
-        fd_table[1] = FileS(0, 0, 0, 0, 0, 0, 0, "out");
-        fd_table[2] = FileS(0, 0, 0, 0, 0, 0, 0, "err");
-    }
-
-    function _spawn_processes() internal {
-        _proc[SUPER_USER + 1] = ProcessInfo(SUPER_USER, SUPER_USER + 1, DEF_UMASK, ROOT);
-        _proc[SUPER_USER + 2] = ProcessInfo(REG_USER, SUPER_USER + 2, DEF_UMASK, ROOT);
-        _proc[SUPER_USER + 2].fd_table = _get_fd_table();
-        _proc[SUPER_USER + 3] = ProcessInfo(REG_USER + 1, SUPER_USER + 3, DEF_UMASK, ROOT);
-        _proc[SUPER_USER + 3].fd_table = _get_fd_table();
-    }
-
-    function _init_users() internal {
-        _users[SUPER_USER] = UserInfo(SUPER_USER_GROUP, "root", "root");
-        _users[REG_USER] = UserInfo(REG_USER_GROUP, "boris", "staff");
-        _users[REG_USER + 1] = UserInfo(REG_USER_GROUP, "ivan", "staff");
-        _users[GUEST_USER] = UserInfo(GUEST_USER_GROUP, "guest", "guest");
-    }
-
-    function _init_readers() internal {
-        _readers = [
-            address.makeAddrStd(0, 0x47169541fd28e7688079c4319a8de3b358ce13d87e25bbd3eaded12ae9b09f40),
-            address.makeAddrStd(0, 0x44981ddf8d0d7d593598e44b754482c5792f0d49d8416ebfeb24834bf26a77d9),
-            address.makeAddrStd(0, 0x48a04e9fc99be89ddfe4eb1f7303ee417ebae174514b5e11c072834259250eec),
-            address.makeAddrStd(0, 0x4be68a2f14b949f1388f8e5dce3bbee14d35518abd8efcc93919bbb921218f8d),
-            address.makeAddrStd(0, 0x430dd570de5398dbc2319979f5ba4aa99d5254e5382d3c344b985733d141617b)];
-        for (address addr: _readers)
+    function assign_readers(address[] readers) external accept {
+        _readers = readers;
+        for (address addr: readers)
             ICacheFS(addr).flush_fs_cache{value: 0.02 ton, flag: 1}();
-    }
-
-    function init() external accept {
-        _make_fs();
-        _init_users();
-        _spawn_processes();
-        this.init2();
-    }
-
-    function init2() external accept {
-        _init_readers();
     }
 
     /* Fully update a file system information on a file system cache device */
     function query_fs_cache() external override view accept {
-        ICacheFS(msg.sender).update_fs_cache{value: 0.1 ton, flag: 1}(_fs.sb, _dev, _proc, _users, _groups, _fs.inodes);
+        ICacheFS(msg.sender).update_fs_cache{value: 0.1 ton, flag: 1}(_sb, _proc, _users, _groups, _inodes);
     }
 
     function _update_inodes(mapping (uint16 => Inode) inn) internal view {
         for (address addr: _readers)
-            ICacheFS(addr).update_fs_cache{value: 0.1 ton, flag: 1}(_fs.sb, _dev, _proc, _users, _groups, inn);
+            ICacheFS(addr).update_fs_cache{value: 0.1 ton, flag: 1}(_sb, _proc, _users, _groups, inn);
+    }
+
+    function update_fs_cache(SuperBlock sb, mapping (uint16 => ProcessInfo) processes, mapping (uint16 => UserInfo) users,
+                            mapping (uint16 => GroupInfo) groups, mapping (uint16 => Inode) inodes) external accept {
+        for ((uint16 i, Inode inode): inodes)
+            _inodes[i] = inode;
+
+        _proc = processes;
+        _users = users;
+        _groups = groups;
+        _sb = sb;
     }
 
     function _update_inodes_set(uint16[] indices) internal view {
         mapping (uint16 => Inode) inn;
         uint count;
         for (uint16 i: indices)
-            if (_fs.inodes.exists(i)) {
-                inn[i] = _fs.inodes[i];
+            if (_inodes.exists(i)) {
+                inn[i] = _inodes[i];
                 count++;
             }
         _update_inodes(inn);
     }
 
     /* Superblock and index node housekeeping helpers */
-    function _claim_inodes(uint inode_count, uint block_count) internal {
-        uint16 n_inodes = uint16(inode_count);
-        uint16 n_blocks = uint16(block_count);
-        _fs.ic += n_inodes;
-        SuperBlock sb = _fs.sb;
+    function _claim_inodes(uint i_count, uint b_count) internal {
+        uint16 n_inodes = uint16(i_count);
+        uint16 n_blocks = uint16(b_count);
+        SuperBlock sb = _sb;
         sb.inode_count += n_inodes;
         sb.block_count += n_blocks;
         sb.free_blocks -= n_blocks;
         sb.free_inodes -= n_inodes;
         sb.last_write_time = now;
         sb.lifetime_writes++;
-        _fs.sb = sb;
+        _sb = sb;
     }
 
 }

@@ -1,4 +1,4 @@
-pragma ton-solidity >= 0.49.0;
+pragma ton-solidity >= 0.51.0;
 
 import "String.sol";
 
@@ -17,6 +17,8 @@ abstract contract Format is String {
     }
 
     function _format_table_ext(Column[] cf, string[][] lines, string delimiter, string line_delimiter) internal pure returns (string out) {
+        if (lines.empty())
+            return "";
         uint[] max_widths = _max_table_row_widths(lines);
         uint n_columns = cf.length;
         uint n_rows = lines.length;
@@ -35,6 +37,8 @@ abstract contract Format is String {
     }
 
     function _format_table(string[][] lines, string delimiter, string line_delimiter, uint8 align) internal pure returns (string out) {
+        if (lines.empty())
+            return "";
         uint[] max_widths = _max_table_row_widths(lines);
         uint n_rows = lines.length;
         for (uint i = 0; i < n_rows; i++) {
@@ -89,41 +93,36 @@ abstract contract Format is String {
         return d > 10 ? format("{}K", d) : format("{}.{}K", d, m / 100);
     }
 
-    /* Time display helpers */
-    /*function _to_date(uint32 t) internal pure returns (string month, uint32 day, uint32 hour, uint32 minute, uint32 second) {
-        uint32 Aug_1st = 1627776000; // Aug 1st
-        uint32 Sep_1st = 1630454400; // Aug 1st
-        bool past_Aug = t >= Sep_1st;
-        if (t >= Aug_1st) {
-            month = past_Aug ? "Sep" : "Aug";
-            uint32 t0 = t - (past_Aug ? Sep_1st : Aug_1st);
-            day = t0 / 86400 + 1;
-            uint32 t1 = t0 % 86400;
-            hour = t1 / 3600;
-            uint32 t2 = t1 % 3600;
-            minute = t2 / 60;
-            second = t2 % 60;
-        }
+    function _month(uint t) internal pure returns (string, uint) {
+        uint Aug_1st = 1627776000;
+        uint Sep_1st = 1630454400;
+        uint Oct_1st = 1633046400;
+        uint Nov_1st = 1635724800;
+        uint Dec_1st = 1638316800;
+
+        if (t >= Dec_1st)
+            return ("Dec", Dec_1st);
+        else if (t >= Nov_1st)
+            return ("Nov", Nov_1st);
+        else if (t >= Oct_1st)
+            return ("Oct", Oct_1st);
+        else if (t >= Sep_1st)
+            return ("Sep", Sep_1st);
+        else if (t >= Aug_1st)
+            return ("Aug", Aug_1st);
     }
 
-    function _ts(uint32 t) internal pure returns (string) {
-        (string month, uint32 day, uint32 hour, uint32 minute, uint32 second) = _to_date(t);
-        return format("{} {} {:02}:{:02}:{:02}", month, day, hour, minute, second);
-    }*/
+    /* Time display helpers */
     function _to_date(uint t) internal pure returns (string month, uint day, uint hour, uint minute, uint second) {
-        uint Aug_1st = 1627776000; // Aug 1st
-        uint Sep_1st = 1630454400; // Aug 1st
-        bool past_Aug = t >= Sep_1st;
-        if (t >= Aug_1st) {
-            month = past_Aug ? "Sep" : "Aug";
-            uint t0 = t - (past_Aug ? Sep_1st : Aug_1st);
-            day = t0 / 86400 + 1;
-            uint t1 = t0 % 86400;
-            hour = t1 / 3600;
-            uint t2 = t1 % 3600;
-            minute = t2 / 60;
-            second = t2 % 60;
-        }
+        uint t_start;
+        (month, t_start) = _month(t);
+        uint t0 = t - t_start;
+        day = t0 / 86400 + 1;
+        uint t1 = t0 % 86400;
+        hour = t1 / 3600;
+        uint t2 = t1 % 3600;
+        minute = t2 / 60;
+        second = t2 % 60;
     }
 
     function _ts(uint t) internal pure returns (string) {

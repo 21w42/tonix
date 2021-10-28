@@ -1,7 +1,7 @@
-pragma ton-solidity >= 0.49.0;
+pragma ton-solidity >= 0.51.0;
 
 import "Base.sol";
-import "String.sol";
+import "Format.sol";
 
 struct Inode {
     uint16 mode;
@@ -34,37 +34,12 @@ struct SuperBlock {
     uint16 inode_size;
 }
 
-struct FileSystem {
-    string uuid;
-    uint8 fs_type;
-    SuperBlock sb;
-    uint16 ic;
-    mapping (uint16 => Inode) inodes;
-}
-
-struct Mount {
-    FileSystem fs;
-    DeviceInfo dev;
-    string path;
-    uint16 options;
-    uint16 target;
-}
-
 struct MountInfo {
     uint8 source_dev_id;
-    uint16 source_export_id;
+    uint16 source_id;
     uint16 target_mount_point;
     string target_path;
     uint16 options;
-}
-
-struct DeviceInfo {
-    uint8 major_id;
-    uint8 minor_id;
-    string name;
-    uint16 blk_size;
-    uint16 n_blocks;
-    address device_address;
 }
 
 struct FileMapS {
@@ -116,8 +91,14 @@ struct TTY {
     uint16 login_id;
 }
 
+struct TextDataFile {
+    uint8 file_type;
+    string file_name;
+    string[] contents;
+}
+
 /* Base contract to work with index nodes */
-abstract contract Internal is Base, String {
+contract Internal is Base, Format {
 
     uint16 constant S_IXOTH = 1 << 0;
     uint16 constant S_IWOTH = 1 << 1;
@@ -190,37 +171,26 @@ abstract contract Internal is Base, String {
     uint8 constant AE_LOGOUT        = 2;
     uint8 constant AE_SHUTDOWN      = 3;
 
+    constructor(DeviceInfo dev, address source) Base (dev, source) public {
+    }
+
     /* File system helpers */
-    function _dump_fs(uint8 level, FileSystem fs) internal pure returns (string out) {
-        for ((uint16 i, Inode ino): fs.inodes) {
+    function _dump_fs(uint8 level, SuperBlock sb, mapping (uint16 => Inode) inodes) internal pure returns (string out) {
+        (bool file_system_state, bool errors_behavior, string file_system_OS_type, uint16 inode_count, uint16 block_count, uint16 free_inodes,
+            uint16 free_blocks, uint16 block_size, uint32 created_at, uint32 last_mount_time, uint32 last_write_time, uint16 mount_count,
+            uint16 max_mount_count, uint16 lifetime_writes, uint16 first_inode, uint16 inode_size) = sb.unpack();
+        out = format("{} IC {} BC {} FI {} FB {} BS {} MC {} MMC {} WR {} FI {} IS {} FSS {} EB {}\n",
+            file_system_OS_type, inode_count, block_count, free_inodes, free_blocks, block_size,
+            mount_count, max_mount_count, lifetime_writes, first_inode, inode_size, file_system_state ? "Y" : "N", errors_behavior ? "Y" : "N");
+        out.append(format("CT {} LMT {} LWT {}\n", _ts(created_at), _ts(last_mount_time), _ts(last_write_time)));
+
+        for ((uint16 i, Inode ino): inodes) {
             (uint16 mode, uint16 owner_id, uint16 group_id, uint32 file_size, uint16 n_links, , , string file_name, string[] text_data) = ino.unpack();
             out.append(format("I {} {} PM {} O {} G {} SZ {} NL {}\n", i, file_name, mode, owner_id, group_id, file_size, n_links));
             if (level > 0 && ((mode & S_IFMT) == S_IFDIR || (mode & S_IFMT) == S_IFLNK) || level > 1)
                 for (string s: text_data)
                     out.append(s + "\n");
         }
-    }
-
-    function _get_fs(uint8 fs_type, string fs_uuid, string[] root_subdirs) internal pure returns (FileSystem fs) {
-        uint16 n = uint16(root_subdirs.length) + 1;
-
-        SuperBlock sb = SuperBlock(
-            true, true, fs_uuid, n, n, MAX_INODES - n, MAX_BLOCKS - n, DEF_BLOCK_SIZE,
-            now, now, now, 0, MAX_MOUNT_COUNT, 1, INODES + 1, DEF_INODE_SIZE);
-
-        fs = FileSystem(fs_uuid, fs_type, sb, ROOT_DIR + n);
-        Inode root_dir = _get_dir_node(ROOT_DIR, ROOT_DIR, SUPER_USER, SUPER_USER_GROUP, "");
-
-        for (uint i = 0; i < n - 1; i++) {
-            string sub_dir_name = root_subdirs[i];
-            uint16 index = uint16(ROOT_DIR + i + 1);
-            fs.inodes[index] = _get_dir_node(index, ROOT_DIR, SUPER_USER, SUPER_USER_GROUP, sub_dir_name);
-            string dir_entry = _dir_entry_line(index, sub_dir_name, FT_DIR);
-            root_dir.text_data.push(dir_entry);
-            root_dir.file_size += dir_entry.byteLength();
-        }
-        root_dir.n_links += n - 1;
-        fs.inodes[ROOT_DIR] = root_dir;
     }
 
     /* Directory entry helpers */
@@ -305,9 +275,9 @@ abstract contract Internal is Base, String {
     }
 
     function _file_type_description(uint16 mode) internal pure returns (string) {
-        if ((mode & S_IFMT) == S_IFBLK)  return "block special file";
-        if ((mode & S_IFMT) == S_IFCHR)  return "character special file";
-        if ((mode & S_IFMT) == S_IFREG)  return "regular file";
+        if ((mode & S_IFMT) == S_IFBLK)  return "block special";
+        if ((mode & S_IFMT) == S_IFCHR)  return "character special";
+        if ((mode & S_IFMT) == S_IFREG)  return "regular";
         if ((mode & S_IFMT) == S_IFDIR)  return "directory";
         if ((mode & S_IFMT) == S_IFLNK)  return "symbolic link";
         if ((mode & S_IFMT) == S_IFSOCK) return "socket";
@@ -342,13 +312,16 @@ abstract contract Internal is Base, String {
         return Inode(DEF_REG_FILE_MODE, owner, group, uint32(file_size), 1, now, now, file_name, text_data);
     }
 
+    function _get_dots(uint16 this_dir, uint16 parent_dir) internal pure returns (string[]) {
+        return [format("d.\t{}", this_dir), format("d..\t{}", parent_dir)];
+    }
+
     function _get_dir_node(uint16 this_dir, uint16 parent_dir, uint16 owner, uint16 group, string dir_name) internal pure returns (Inode) {
-//        return Inode(DEF_DIR_MODE, owner, group, 13, 2, now, now, dir_name, [format("d.\t{}", this_dir), format("d..\t{}", parent_dir)]);
-        return _get_any_node(FT_DIR, owner, group, dir_name, [format("d.\t{}", this_dir), format("d..\t{}", parent_dir)]);
+//        return _get_any_node(FT_DIR, owner, group, dir_name, [format("d.\t{}", this_dir), format("d..\t{}", parent_dir)]);
+        return _get_any_node(FT_DIR, owner, group, dir_name, _get_dots(this_dir, parent_dir));
     }
 
     function _get_symlink_node(uint16 owner, uint16 group, string file_name, string target_dirent) internal pure returns (Inode) {
-//        return Inode(DEF_SYMLINK_MODE, owner, group, uint32(target_dirent.byteLength()), 1, now, now, file_name, [target_dirent]);
         return _get_any_node(FT_SYMLINK, owner, group, file_name, [target_dirent]);
     }
 }

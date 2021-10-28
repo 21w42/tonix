@@ -1,12 +1,10 @@
-pragma ton-solidity >= 0.49.0;
+pragma ton-solidity >= 0.51.0;
 
 import "Internal.sol";
 import "Commands.sol";
-import "ExportFS.sol";
-import "Format.sol";
 import "ICache.sol";
 
-contract AccessManager is Internal, Commands, ExportFS, Format, IUserTables {
+contract AccessManager is Internal, Commands, IUserTables {
 
 //    mapping (uint16 => ProcessInfo) public _proc;
     mapping (uint16 => UserInfo) public _users;
@@ -15,7 +13,6 @@ contract AccessManager is Internal, Commands, ExportFS, Format, IUserTables {
     uint16 _sys_users_counter;
     uint16 _reg_groups_counter;
     uint16 _sys_groups_counter;
-    address _target_device_address;
 
     mapping (uint16 => Login) public _utmp;
     LoginEvent[] public _wtmp;
@@ -69,6 +66,11 @@ contract AccessManager is Internal, Commands, ExportFS, Format, IUserTables {
     uint8 constant E_PAM_USERNAME  = 12; // can't determine your username for use with pam
     uint8 constant E_PAM_ERROR     = 13; // pam returned an error, see syslog facility id groupmod for the PAM error message
 
+    constructor(DeviceInfo dev, address source) Internal (dev, source) public {
+        _dev = dev;
+        _source = source;
+    }
+
     function update_tables(mapping (uint16 => UserInfo) users, mapping (uint16 => GroupInfo) groups,
         uint16 reg_u, uint16 sys_u, uint16 reg_g, uint16 sys_g) external override accept {
         _users = users;
@@ -78,10 +80,12 @@ contract AccessManager is Internal, Commands, ExportFS, Format, IUserTables {
         _reg_groups_counter += reg_g;
         _sys_groups_counter += sys_g;
     }
-
     function update_users(Session session, UserEvent[] ues) external view accept {
+        tvm.
+            a += 2;
+        }
         if (!ues.empty())
-            ISourceFS(_target_device_address).update_user_info{value: 0.1 ton, flag: 1}(session, ues);
+            ISourceFS(_source).update_user_info{value: 0.1 ton, flag: 1}(session, ues);
     }
 
     function update_logins(Session session, LoginEvent le) external accept {
@@ -507,8 +511,7 @@ contract AccessManager is Internal, Commands, ExportFS, Format, IUserTables {
                     _ts(timestamp)]);
         }
 
-        if (!table.empty())
-            out = _format_table_ext(columns_format, table, " ", "\n");
+        out = _format_table_ext(columns_format, table, " ", "\n");
         out.append("wtmp begins Mon Mar 22 23:44:55 2021\n");
     }
 
@@ -584,8 +587,7 @@ contract AccessManager is Internal, Commands, ExportFS, Format, IUserTables {
                 (uint16 user_id, uint16 tty_id, uint16 process_id, uint32 login_time) = l.unpack();
                 table.push([format("{}", l_id), format("{}", user_id), format("{}", tty_id), format("{}", process_id), _ts(login_time)]);
             }
-        if (!table.empty())
-            out = _format_table_ext(columns_format, table, " ", "\n");
+        out = _format_table_ext(columns_format, table, " ", "\n");
     }
 
     function _who(uint flags) internal view returns (string out) {
@@ -634,19 +636,13 @@ contract AccessManager is Internal, Commands, ExportFS, Format, IUserTables {
             table.push([ui_user_name, "+", format("{}", tty_id), _ts(login_time), format("{}", process_id)]);
         }
 
-
-        if (!table.empty())
-            out = _format_table_ext(columns_format, table, " ", "\n");
+        out = _format_table_ext(columns_format, table, " ", "\n");
     }
 
-    function _init() internal override {
-        _export_fs = _get_fs(1, "uadmfs", ["etc"]);
-
+    function _init() internal override accept {
         _init_login_defs();
         _init_groups();
         _init_users();
-        _sb_exports.push(_get_export_sb(ROOT_DIR + 3 + 2, 3, "/etc"));
-        _target_device_address = address.makeAddrStd(0, 0x41e30674f62ca6b5859e2941488957af5e01c71b886ddd57458aec47315490d5);
     }
 
     function _login_def_flag(uint16 key) internal view returns (bool) {
@@ -659,11 +655,6 @@ contract AccessManager is Internal, Commands, ExportFS, Format, IUserTables {
 
     function _login_def_string(uint16 key) internal view returns (string) {
         return _login_defs_string[key];
-    }
-
-    function _add_data_file(string name, string[] contents) internal {
-        uint16 counter = _export_fs.ic++;
-        _export_fs.inodes[counter] = _get_any_node(FT_REG_FILE, SUPER_USER, SUPER_USER_GROUP, name, contents);
     }
 
     function _init_login_defs() internal {
@@ -684,7 +675,7 @@ contract AccessManager is Internal, Commands, ExportFS, Format, IUserTables {
         _login_defs_bool[DEFAULT_HOME] = true;
         _login_defs_bool[USERGROUPS_ENAB] = true;
         _login_defs_string[CONSOLE_GROUPS] = "floppy:audio:cdrom";
-        _add_data_file("login.defs", [
+        /*_add_data_file(1, "login.defs", [
             "FAILLOG_ENAB\tyes",
             "LOG_UNKFAIL_ENAB\tyes",
             "LOG_OK_LOGINS\tyes",
@@ -708,7 +699,7 @@ contract AccessManager is Internal, Commands, ExportFS, Format, IUserTables {
             "CHFN_RESTRICT\trwh",
             "DEFAULT_HOME\tyes",
             "USERGROUPS_ENAB\tyes",
-            "CONSOLE_GROUPS\tfloppy,audio,cdrom"]);
+            "CONSOLE_GROUPS\tfloppy,audio,cdrom"]);*/
     }
 
     function _init_users() internal {
@@ -723,11 +714,6 @@ contract AccessManager is Internal, Commands, ExportFS, Format, IUserTables {
         _users[_reg_users_counter++] = UserInfo(_reg_groups_counter - 1, "boris", "staff");
         _users[_reg_users_counter++] = UserInfo(_reg_groups_counter - 1, "ivan", "staff");
         _users[GUEST_USER] = UserInfo(GUEST_USER_GROUP, "guest", "guest");
-        _add_data_file("passwd", [
-            "root\t0\t0\troot\t/root",
-            "boris\t1000\t1000\tstaff\t/home/boris",
-            "ivan\t1001\t1000\tstaff\t/home/ivan",
-            "guest\t10000\t10000\tguest\t/home/guest"]);
     }
 
     function _init_groups() internal {
@@ -741,10 +727,6 @@ contract AccessManager is Internal, Commands, ExportFS, Format, IUserTables {
         _groups[SUPER_USER_GROUP] = GroupInfo("root", true);
         _groups[_reg_groups_counter++] = GroupInfo("staff", false);
         _groups[GUEST_USER_GROUP] = GroupInfo("guest", false);
-        _add_data_file("group", [
-            "root\t0",
-            "staff\t1000",
-            "guest\t10000"]);
     }
 
 }

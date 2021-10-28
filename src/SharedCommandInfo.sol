@@ -1,8 +1,9 @@
-pragma ton-solidity >= 0.49.0;
+pragma ton-solidity >= 0.51.0;
 
 import "Commands.sol";
+import "String.sol";
 
-abstract contract SharedCommandInfo is Commands {
+abstract contract SharedCommandInfo is Common, String {
 
     struct CmdInfoS {
         uint8 min_args;
@@ -16,18 +17,21 @@ abstract contract SharedCommandInfo is Commands {
         SharedCommandInfo(msg.sender).update_command_info{value: 1 ton, flag: 1}(_command_names, _command_info);
     }
 
-    function pull_backup_command_info() external pure accept {
-        SharedCommandInfo(address.makeAddrStd(0, 0xcc59225a037b56f2cc325c9ced611994e160c4485537fe01ab3787e5d92ddac3)).query_command_info{value: 0.02 ton}();
-    }
-
     function update_command_info(string[] command_names, mapping (uint8 => CmdInfoS) command_info) external accept {
         _command_names = command_names;
         _command_info = command_info;
     }
 
     function _command_index(string s) internal view returns (uint8) {
-        for (uint8 i = 0; i < _command_names.length; i++)
-            if (_command_names[i] == s)
+        uint len = _command_names.length;
+        string[] commands;
+        if (len > 1)
+            commands = _command_names;
+        else if (len == 1)
+            commands = _split(_command_names[0], " ");
+
+        for (uint8 i = 0; i < commands.length; i++)
+            if (commands[i] == s)
                 return i + 1;
     }
 

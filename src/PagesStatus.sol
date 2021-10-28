@@ -1,11 +1,17 @@
-pragma ton-solidity >= 0.49.0;
+pragma ton-solidity >= 0.51.0;
 
 import "Pages.sol";
 
 /* File system status commands manual */
 contract PagesStatus is Pages {
 
-    function _init1() internal view override accept {
+    constructor(DeviceInfo dev, address source) Pages (dev, source) public {
+        _dev = dev;
+        _source = source;
+    }
+
+    function _get_pages() internal override pure returns (Page[] pages) {
+        pages = [
         _add_page("df", "report file system disk space usage", "[OPTION]... [FILE]...",
             "Displays the amount of disk space available on the file system containing each file name argument.",
             "ahHiklPv", 1, M, [
@@ -16,7 +22,7 @@ contract PagesStatus is Pages {
             "block size = 1K",
             "limit listing to local file systems",
             "use the POSIX output format",
-            "(ignored)"]);
+            "(ignored)"]),
         _add_page("du", "estimate disk usage", "[OPTION]... [FILE]...",
             "Summarize disk usage of the set of FILEs, recursively for directories.",
             "abcDhHkLlmPSsx0", 1, M, [
@@ -34,7 +40,7 @@ contract PagesStatus is Pages {
             "for directories do not include size of subdirectories",
             "display only a total for each argument",
             "skip directories on different file systems",
-            "end each output line with NUL, not newline"]);
+            "end each output line with NUL, not newline"]),
         _add_page("findmnt", "find a filesystem", "[options]\t[options] device|mountpoint[options] [device...]",
             "List all mounted filesystems or search for a filesystem.",
             "smkAbDfnu", 0, M, [
@@ -46,7 +52,7 @@ contract PagesStatus is Pages {
             "imitate the output of df(1)",
             "print the first found filesystem only",
             "don't print column headings",
-            "don't truncate text in columns"]);
+            "don't truncate text in columns"]),
         _add_page("fuser", "identify processes using files or sockets", "[-almsuv]",
             "Displays the PIDs of processes using the specified files or file systems.",
             "almsuv", 0, 1, [
@@ -55,10 +61,7 @@ contract PagesStatus is Pages {
             "show all processes using the named filesystems or block device",
             "silent operation",
             "display user IDs",
-            "verbose output"]);
-    }
-
-    function init2() external view override accept {
+            "verbose output"]),
         _add_page("ls", "list directory contents", "[OPTION]... [FILE]...",
             "List information about the FILE (the current directory by default).",
             "aABcCdfFgGhHikLlmnNopqQrRsStuUvxX1", 1, M, [
@@ -95,10 +98,7 @@ contract PagesStatus is Pages {
             "natural sort of (version) numbers within text",
             "list entries by lines instead of by columns",
             "sort alphabetically by entry extension",
-            "list one file per line. Avoid \'\\n\' with -q or -b"]);
-    }
-
-    function init3() external view override accept {
+            "list one file per line. Avoid \'\\n\' with -q or -b"]),
         _add_page("lsblk", "list block devices", "[options] [device...]",
             "List information about all available or the specified block devices.",
             "abfmnOp", 0, M, [
@@ -108,7 +108,7 @@ contract PagesStatus is Pages {
             "output info about permissions",
             "don't print headings",
             "output all columns",
-            "print complete device path"]);
+            "print complete device path"]),
         _add_page("lsof", "list open files", "[-lnoRst]",
             "Output file information about files opened by processes.",
             "lnoRst", 0, M, [
@@ -117,19 +117,19 @@ contract PagesStatus is Pages {
             "list file offset",
             "list paRent PID",
             "list file size",
-            "terse listing"]);
+            "terse listing"]),
         _add_page("mountpoint", "see if a directory or file is a mountpoint", "[-d|-q] directory | file\t-x device",
             "Checks whether the given directory or file is mentioned in the /proc/self/mountinfo file.",
             "dqx", 1, 1, [
             "quiet mode - don't print anything",
             "print maj:min device number of the filesystem",
-            "print maj:min device number of the block device"]);
+            "print maj:min device number of the block device"]),
         _add_page("ps", "report a snapshot of the current processes", "[options]",
             "Displays information about a selection of the active processes.",
             "efF", 0, 0, [
             "select all processes",
             "do full-format listing",
-            "extra full format"]);
+            "extra full format"]),
         _add_page("readlink", "print resolved symbolic links or canonical file names", "[OPTION]... FILE...",
             "Print value of a symbolic link or canonical file name. Canonicalize by following every symlink in every component of the given name recursively.",
             "femnqsvz", 1, M, [
@@ -140,7 +140,7 @@ contract PagesStatus is Pages {
             "quiet",
             "suppress most error messages (on by default)",
             "report error messages",
-            "end each output line with NUL, not newline"]);
+            "end each output line with NUL, not newline"]),
         _add_page("realpath", "print the resolved path", "[OPTION]... FILE...",
             "Print the resolved absolute file name; all but the last component must exist.",
             "emLPqsz", 1, M, [
@@ -150,12 +150,12 @@ contract PagesStatus is Pages {
             "resolve symlinks as encountered (default)",
             "suppress most error messages",
             "don't expand symlinks",
-            "end each output line with NUL, not newline"]);
+            "end each output line with NUL, not newline"]),
         _add_page("stat", "display file or file system status", "[OPTION]... FILE...",
             "Display file or file system status.",
             "Lft", 1, M, [
             "follow links",
             "display file system status instead of file status",
-            "print the information in terse form"]);
+            "print the information in terse form"])];
     }
 }

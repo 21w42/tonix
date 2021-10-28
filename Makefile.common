@@ -21,7 +21,8 @@ LINKER:=$(BIN)/tvm_linker
 TOC:=$(BIN)/tonos-cli
 
 GIVER:=Novi
-_pay=$(BIN)/$(GIVER)/s3.sh $1 $2
+#_pay=$(BIN)/$(GIVER)/s3.sh $1 $2
+_pay=$(BIN)/$(GIVER)/s2.sh $1 $2
 
 # Repository location
 GIT:=$(CURDIR)

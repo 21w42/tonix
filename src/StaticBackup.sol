@@ -1,8 +1,15 @@
-pragma ton-solidity >= 0.49.0;
+pragma ton-solidity >= 0.51.0;
 
 import "SharedCommandInfo.sol";
+import "Internal.sol";
+import "Commands.sol";
 
-contract StaticBackup is SharedCommandInfo {
+contract StaticBackup is SharedCommandInfo, Commands, Internal {
+
+    constructor(DeviceInfo dev, address source) Internal (dev, source) public {
+        _dev = dev;
+        _source = source;
+    }
 
     function _init() internal override {
         uint _RHLP = _R + _H + _L + _P; // 2.6

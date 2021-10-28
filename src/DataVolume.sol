@@ -1,19 +1,21 @@
-pragma ton-solidity >= 0.49.0;
+pragma ton-solidity >= 0.51.0;
 
 import "ExportFS.sol";
+
+interface IBlockDevice {
+    function assign_readers(address[] readers) external;
+}
 
 /* Primary configuration files for a block device system initialization and error diagnostic data */
 contract DataVolume is ExportFS {
 
-    function _add_data_file(string name, string[] contents) internal {
-        uint16 counter = _export_fs.ic++;
-        _export_fs.inodes[counter] = _get_any_node(FT_REG_FILE, SUPER_USER, SUPER_USER_GROUP, name, contents);
+    constructor(DeviceInfo dev, address source) Internal (dev, source) public {
+        _dev = dev;
+        _source = source;
     }
 
-    function _init() internal override accept {
-        _export_fs = _get_fs(1, "exportfs", ["errors", "etc"]);
-        /* Exported to /usr */
-        _add_data_file("reasons", [
+    function _init_exports() internal override accept {
+        _add_data_file(1, "reasons", [
             "missing operand",
             "cannot remove",
             "cannot stat",
@@ -48,7 +50,7 @@ contract DataVolume is ExportFS {
             "mutually exclusive arguments: -c -n -r -z",
             "failed to locate login data",
             "not a block device"]);
-        _add_data_file("status", [
+        _add_data_file(1, "status", [
             "No such file or directory",
             "File exists",
             "Not a directory",
@@ -63,21 +65,19 @@ contract DataVolume is ExportFS {
             "fd is not a valid open file descriptor",
             "Device busy", "Operation not applicable",
             "pathname is too long"]);
-        _add_data_file("internal", [
+        _add_data_file(1, "internal", [
             "direntry not found",
             "inode not found",
             "parent direntry not found",
             "child direntry not found",
             "invalid user id",
             "invalid working directory"]);
-        _sb_exports.push(_get_export_sb(ROOT_DIR + 3, 3, "/usr"));
-
         this.init2();
     }
 
     function init2() external accept {
         /* Exported to /etc */
-        _add_data_file("command_list", [
+        _add_data_file(2, "command_list", [
             "account", "basename", "blkdiscard", "cat", "cd", "chfn", "chgrp", "chmod", "chown","cksum", "cmp", "colrm", "column", "cp", "cut",
             "dd", "df", "dirname", "du", "echo", "env", "expand", "fallocate", "file", "findfs", "findmnt", "finger", "fsck", "fstrim", "fuser",
             "getent", "getopt", "gpasswd", "grep", "groupadd", "groupdel", "groupmod", "head", "help", "hostname", "id", "last", "ln", "login",
@@ -85,7 +85,7 @@ contract DataVolume is ExportFS {
             "mv", "namei", "newgrp", "paste", "pathchk", "ping", "ps", "pwd", "readlink", "realpath", "reboot", "rename", "rev", "rm", "rmdir",
             "script", "stat", "tail", "tar", "touch", "tr", "truncate", "udevadm", "umount", "uname", "unexpand", "useradd", "userdel", "usermod",
             "utmpdump", "wc", "whatis", "whereis", "who", "whoami"]);
-        _add_data_file("exports", [
+        _add_data_file(2, "exports", [
             "BlockDevice\t/\t0\t1",
             "DataVolume\t/etc\t3\t2",
             "DataVolume\t/usr\t8\t1",
@@ -95,12 +95,12 @@ contract DataVolume is ExportFS {
             "ManualStatus\t/bin\t1\t1",
             "ManualSession\t/bin\t1\t1",
             "ManualUtility\t/bin\t1\t1"]);
-        _add_data_file("fstab", [
+        _add_data_file(2, "fstab", [
             "/etc\tDataVolume\t1\t3\t2",
             "/usr\tDataVolume\t1\t8\t1",
             "/sys/dev/block\tDeviceManager\t1\t13\t1",
             "/sys/dev/char\tDeviceManager\t1\t14\t2"]);
-        _add_data_file("fs_types", [
+        _add_data_file(2, "fs_types", [
             "?unknown",
             "-regular file",
             "ddirectory",
@@ -109,14 +109,14 @@ contract DataVolume is ExportFS {
             "pfifo",
             "ssocket",
             "lsymbolic link"]);
-        _add_data_file("group", [
+        _add_data_file(2, "group", [
             "root\t0",
             "staff\t1000",
             "guest\t10000"]);
-        _add_data_file("hostname", [
+        _add_data_file(2, "hostname", [
             "BlockDevice",
             "0:41e30674f62ca6b5859e2941488957af5e01c71b886ddd57458aec47315490d5"]);
-        _add_data_file("hosts", [
+        _add_data_file(2, "hosts", [
             "0:47169541fd28e7688079c4319a8de3b358ce13d87e25bbd3eaded12ae9b09f40\tFileManager",
             "0:44981ddf8d0d7d593598e44b754482c5792f0d49d8416ebfeb24834bf26a77d9\tStatusReader",
             "0:439f4e7f5eedbe2348632124e0e6b08a30b10fc2d45951365f4a9388fc79c3fb\tDataVolume",
@@ -132,15 +132,15 @@ contract DataVolume is ExportFS {
             "0:379d5fffd72aa80b00e3f3dd73f0f748eeac311b5992de9b3cd3115b97cbb525\tPagesUtility",
             "0:694d24fe1aa0464859d21ce58a62875b80e16f6c36595f363e8b86b603bde7d4\tPagesAdmin",
             "0:9f1e5499529a00aad0990d2f7dd7d1bfd23e2d0939d4e739e2659dc27313819a\tStaticBackup"]);
-        _add_data_file("legacy_hosts", [
+        _add_data_file(2, "legacy_hosts", [
             "0:4b937783725628153f2fa320f25a7dd1d68acf948e38ea5a0c5f7f3857db8981\tManualCommands",
             "0:41d95cddc9ca3c082932130c208deec90382f5b7c0036c8d84ac3567e8b82420\tManualStatus",
             "0:41e37889496dce38efdeb5764cf088287171d72c523c370b37bb6b3621d1f93e\tManualSession",
             "0:4e5561b275d060ff0d0919ccc7e485d08c8e1fe9abd92af6cdf19ebfb2dd5421\tManualUtility",
             "0:650627a3165cea5c12558aaf9d38f791a33660792d41136e1a6dba48549ce89b\tManualAdmin"]);
-        _add_data_file("magic", [
+        _add_data_file(2, "magic", [
             "11"]);
-        _add_data_file("motd", [
+        _add_data_file(2, "motd", [
             "Welcome to Tonix.",
             "Type \"help\" to get a list of commands.",
             "\"man <COMMAND>\" or \"help <COMMAND>\" sometimes might be helpful.",
@@ -149,13 +149,12 @@ contract DataVolume is ExportFS {
             "Path resolution does not work yet, one step at a time please.",
             "Your feedback is greatly appreciated!",
             "Have fun :)"]);
-        _add_data_file("mtab", [
+        _add_data_file(2, "mtab", [
             "/\tBlockDevice\t1\t1\t1"]);
-        _add_data_file("passwd", [
+        _add_data_file(2, "passwd", [
             "root\t0\t0\troot\t/root",
             "boris\t1000\t1000\tstaff\t/home/boris",
             "ivan\t1001\t1000\tstaff\t/home/ivan",
             "guest\t10000\t10000\tguest\t/home/guest"]);
-        _sb_exports.push(_get_export_sb(ROOT_DIR + 3 + 3, 11, "/etc"));
     }
 }

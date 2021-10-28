@@ -1,4 +1,4 @@
-pragma ton-solidity >= 0.49.0;
+pragma ton-solidity >= 0.51.0;
 
 import "Internal.sol";
 import "Commands.sol";
@@ -7,44 +7,48 @@ import "ICache.sol";
 /* Base contract for the file system exporting devices */
 abstract contract ExportFS is Internal, Commands, IExportFS {
 
-    SuperBlock[] public _sb_exports;
-    FileSystem _export_fs;
+    SuperBlock _export_sb;
+    mapping (uint16 => Inode) _export_inodes;
 
-    uint16 constant MAX_EXPORT_INODES = 100;
-    uint16 constant MAX_EXPORT_BLOCKS = 200;
+    function _init_exports() internal virtual;
 
-    /* Respond to a request to export a set of index nodes to the specified mount point directory at the primary file system */
-    function rpc_mountd(uint16 export_id, uint16 mount_point) external override accept {
-        if (export_id <= _sb_exports.length) {
-            SuperBlock esb = _sb_exports[export_id - 1];
-            Inode[] inodes;
-            for (uint16 i = esb.first_inode; i < esb.first_inode + esb.inode_count; i++)
-                inodes.push(_export_fs.inodes[i]);
-            ISourceFS(msg.sender).mount_dir{value: 0.1 ton, flag: 1}(mount_point, inodes);
-            esb.mount_count++;
-            esb.last_mount_time = now;
-            _sb_exports[export_id - 1] = esb;
-        }
+    function _init() internal override {
+        _init_exports();
     }
 
-    function query_export_node(string s_export, string s_file_name) external override accept {
-        for (SuperBlock sb: _sb_exports)
-            if (sb.file_system_OS_type == s_export)
-                for (uint16 i = 0; i < sb.inode_count; i++)
-                    if (_export_fs.inodes[sb.first_inode + i].file_name == s_file_name) {
-                        IImport(msg.sender).update_node{value: 0.02 ton, flag: 1}(_export_fs.inodes[sb.first_inode + i]);
-                        break;
-                    }
+    function init_fs(SuperBlock sb, mapping (uint16 => Inode) inodes) external override accept {
+        _export_sb = sb;
+        _export_inodes = inodes;
+        _init_exports();
+    }
+
+    function _add_data_file(uint8 offset, string file_name, string[] contents) internal {
+        uint16 counter = _export_sb.inode_count++;
+        _export_inodes[counter] = _get_any_node(FT_REG_FILE, SUPER_USER, SUPER_USER_GROUP, file_name, contents);
+        _export_inodes[ROOT_DIR + offset] = _add_dir_entry(_export_inodes[ROOT_DIR + offset], counter, file_name, FT_REG_FILE);
+    }
+
+    /* Respond to a request to export a set of index nodes to the specified mount point directory at the primary file system */
+    function rpc_mountd(uint16 mount_point) external override accept {
+        ISourceFS(msg.sender).mount_dir{value: 0.1 ton, flag: 1}(mount_point, _export_sb, _export_inodes);
+        _export_sb.mount_count++;
+        _export_sb.last_mount_time = now;
+    }
+
+    function query_export_node(string s_file_name) external override accept {
+        SuperBlock sb = _export_sb;
+        for (uint16 i = sb.first_inode; i < sb.inode_count; i++)
+            if (_export_inodes[i].file_name == s_file_name) {
+                IImport(msg.sender).update_node{value: 0.02 ton, flag: 1}(_export_inodes[i]);
+                break;
+            }
     }
 
     /* Print an internal debugging information about the exported file system state */
     function dump_export_fs(uint8 level) external view returns (string) {
-        return _dump_fs(level, _export_fs);
+        return _dump_fs(level, _export_sb, _export_inodes);
     }
 
-    function _get_export_sb(uint16 first_inode, uint16 inode_count, string path) internal pure returns (SuperBlock) {
-        return SuperBlock(true, true, path, inode_count, inode_count, MAX_EXPORT_INODES - inode_count, MAX_EXPORT_BLOCKS - inode_count, DEF_BLOCK_SIZE, now, 0, now, 0, MAX_MOUNT_COUNT, 1, first_inode, DEF_INODE_SIZE);
-    }
 }
 
 

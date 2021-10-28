@@ -1,4 +1,4 @@
-pragma ton-solidity >= 0.49.0;
+pragma ton-solidity >= 0.51.0;
 
 /* String helpers */
 abstract contract String {

@@ -1,10 +1,13 @@
-pragma ton-solidity >= 0.49.0;
+pragma ton-solidity >= 0.51.0;
 
-import "Format.sol";
-import "SyncFS.sol";
 import "CacheFS.sol";
 
-contract PrintFormatted is Format, SyncFS, CacheFS {
+contract PrintFormatted is CacheFS {
+
+    constructor(DeviceInfo dev, address source) Internal (dev, source) public {
+        _dev = dev;
+        _source = source;
+    }
 
     /* Process commands which do not require intrinsic knowledge about the file system */
     function process_command(InputS input) external pure returns (string out) {
@@ -30,7 +33,7 @@ contract PrintFormatted is Format, SyncFS, CacheFS {
         string[][] texts;
         for (uint i = 0; i < len; i++) {
             (, , uint16 idx, , ) = args[i].unpack();
-            texts.push(_fs.inodes[idx].text_data);
+            texts.push(_inodes[idx].text_data);
         }
         session.wd = session.wd;
         out = _format_text(input, texts, args);
@@ -521,7 +524,7 @@ contract PrintFormatted is Format, SyncFS, CacheFS {
         if (index > 0) {
             uint16 dir_index = _resolve_absolute_path(path);
             (uint16 file_index, uint8 ft) = _fetch_dir_entry(file_name, dir_index);
-            string[] text = ft > FT_UNKNOWN ? _fs.inodes[file_index].text_data : ["Failed to read file " + file_name + " at path " + path + "\n"];
+            string[] text = ft > FT_UNKNOWN ? _inodes[file_index].text_data : ["Failed to read file " + file_name + " at path " + path + "\n"];
             return text.length > 1 ? text[index - 1] : _element_at(1, index, text, "\t");
         }
     }
@@ -532,8 +535,8 @@ contract PrintFormatted is Format, SyncFS, CacheFS {
         string command_specific_reason = _command_specific_reason(command);
         for (Err error: errors) {
             (uint8 reason, uint16 explanation, string arg) = error.unpack();
-            string s_reason = reason > 0 ? _fetch_element(reason, "/usr", "reasons") : command_specific_reason;
-            string s_explanation = _fetch_element(explanation, "/usr", "status");
+            string s_reason = reason > 0 ? _fetch_element(reason, "/etc", "reasons") : command_specific_reason;
+            string s_explanation = _fetch_element(explanation, "/etc", "status");
             err = command_name + ": " + s_reason + _quote(arg);
             if (explanation > 0)
                 err.append(s_explanation.empty() ? format("\n Failed expl. lookup r {} e {}\n", reason, explanation) : ": " + s_explanation);
@@ -551,10 +554,4 @@ contract PrintFormatted is Format, SyncFS, CacheFS {
         if (c == rmdir) return "failed to remove";
         if (_op_format(c)) return "";
     }
-
-    /* Initialization routine */
-    function _init() internal override accept {
-        _sync_fs_cache();
-    }
-
 }
